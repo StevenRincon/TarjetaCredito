@@ -1,0 +1,118 @@
+trigger:
+- main
+
+pool:
+  name: 'Default'
+
+variables:
+  buildPath: 'dist'
+  deployPath: 'C:\inetpub\tarjetaCredito'
+  nodeVersion: '20.x'
+
+# =========================================
+# BUILD
+# =========================================
+stages:
+- stage: Build
+  displayName: 'Build TarjetaCredito'
+  jobs:
+  - job: BuildJob
+    steps:
+
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '$(nodeVersion)'
+      displayName: 'Instalar Node.js'
+
+    - script: |
+        node -v
+        npm -v
+      displayName: 'Ver versiones'
+
+    - script: |
+        npm ci
+      displayName: 'Instalar dependencias'
+
+    - script: |
+        npx ng build --configuration production --output-path=$(buildPath)
+      displayName: 'Build Angular'
+
+    - powershell: |
+        if (!(Test-Path "$(buildPath)")) {
+          Write-Error "Build falló"
+          exit 1
+        }
+        Write-Host "Build OK"
+      displayName: 'Validar build'
+
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(buildPath)'
+        ArtifactName: 'drop'
+      displayName: 'Publicar artefactos'
+
+
+# =========================================
+# DEPLOY
+# =========================================
+- stage: Deploy
+  displayName: 'Deploy IIS TarjetaCredito'
+  dependsOn: Build
+  jobs:
+  - deployment: DeployToVM
+    environment: 'VMWindowsServer'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          # =========================================
+          # STOP IIS
+          # =========================================
+          - powershell: |
+              Write-Host "Deteniendo IIS..."
+              iisreset /stop
+              Start-Sleep -Seconds 5
+            displayName: 'Stop IIS'
+
+          # =========================================
+          # COPY FILES (FLEXIBLE browser FIX)
+          # =========================================
+          - powershell: |
+              $sourceRoot = "$(Pipeline.Workspace)\drop"
+              $target = "$(deployPath)"
+
+              if (!(Test-Path $target)) {
+                New-Item -ItemType Directory -Path $target | Out-Null
+              }
+
+              Write-Host "Buscando build browser..."
+
+              $browser = Get-ChildItem $sourceRoot -Recurse -Directory |
+                Where-Object { $_.FullName -match "\\browser$" } |
+                Select-Object -First 1
+
+              if ($browser -eq $null) {
+                Write-Error "No se encontró carpeta browser"
+                exit 1
+              }
+
+              Write-Host "Copiando desde: $($browser.FullName)"
+
+              robocopy $browser.FullName $target /E /COPY:DAT /R:2 /W:2 /NFL /NDL
+
+              if ($LASTEXITCODE -ge 8) {
+                Write-Error "Deploy falló"
+                exit $LASTEXITCODE
+              }
+
+              exit 0
+            displayName: 'Copy files to IIS'
+
+          # =========================================
+          # START IIS
+          # =========================================
+          - powershell: |
+              Write-Host "Iniciando IIS..."
+              iisreset /start
+            displayName: 'Start IIS'
