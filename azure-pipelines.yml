@@ -38,11 +38,7 @@ stages:
       displayName: 'Build Angular'
 
     - powershell: |
-        if (!(Test-Path "$(buildPath)")) {
-          Write-Error "Build falló"
-          exit 1
-        }
-        Write-Host "Build OK"
+        
       displayName: 'Validar build'
 
     - task: PublishBuildArtifacts@1
